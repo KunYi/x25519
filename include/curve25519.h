@@ -48,6 +48,15 @@ void fiat_25519_carry_square(fiat_25519_tight_field_element out1, const fiat_255
 void fiat_25519_carry_scmul_121666(fiat_25519_tight_field_element out1, const fiat_25519_loose_field_element arg1);
 
 /*
+ * The function fiat_25519_carry reduces a loose field element to a tight field element.
+ *
+ * Postconditions:
+ *   eval out1 mod m = eval arg1 mod m
+ *
+ */
+void fiat_25519_carry(fiat_25519_tight_field_element out1, const fiat_25519_loose_field_element arg1);
+
+/*
  * The function fiat_25519_relax is the identity function converting from tight field elements to loose field elements.
  *
  * Postconditions:
@@ -121,7 +130,7 @@ void fiat_25519_to_bytes(uint8_t out1[32], const fiat_25519_tight_field_element 
 void fiat_25519_from_bytes(fiat_25519_tight_field_element out1, const uint8_t arg1[32]);
 
 #ifdef __cplusplus
-extern "C" }
+}
 #endif
 
 #endif /* _CURVE25519_H_ */
