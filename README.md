@@ -13,8 +13,8 @@ v0.1.16 with the following command:
 
 ```bash
 ./fiat-crypto unsaturated-solinas 25519 32 10 '2^255 - 19' \
-carry_mul carry_square carry_scmul121666 relax add sub opp selectznz \
-to_bytes from_bytes \
+carry carry_mul carry_square carry_scmul121666 \
+relax add sub opp selectznz to_bytes from_bytes \
 --lang C --internal-static --inline-internal \
 --output fiat/curve25519_32.c
 ```
