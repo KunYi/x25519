@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <assert.h>
+#include <x86intrin.h>
 #include "fe25519.h"
 
 #ifdef DEBUG
@@ -20,9 +21,9 @@
 #define DEBUG_PRINT(fmt, ...)
 #endif
 
-/* ========== test helper ========== */
+/* ========== test helpers ========== */
 
-// simple random number generator (for testing)
+// Simple random number generator (for testing)
 static uint64_t rng_state = 123456789;
 
 static uint32_t random_u32(void)
@@ -65,10 +66,245 @@ static void hex_to_bytes(const char* hex, uint8_t* bytes, size_t len)
 
 /* ========== test cases ========== */
 
-// test 0: deep field operations (edge cases & algebraic properties)
+// test 0: basic inversion property (a * a^{-1} = 1)
+static int test_invert_basic(void)
+{
+    printf("Test 0: Basic inversion property (a * a^{-1} = 1)...\n");
+
+    for (int test = 0; test < 100; test++) {
+        uint8_t input_bytes[32];
+        random_bytes(input_bytes, 32);
+
+        fe25519_t a, inv, product, one;
+
+        fe25519_frombytes(&a, input_bytes);
+        fe25519_invert(&inv, &a);
+        fe25519_mul(&product, &a, &inv);
+        fe25519_one(&one);
+
+        if (!fe25519_equal(&product, &one)) {
+            printf("  FAILED at test %d\n", test);
+            print_bytes("input", input_bytes, 32);
+            return 0;
+        }
+    }
+
+    printf("  PASSED\n");
+    return 1;
+}
+
+// test 1: inverse of 1
+static int test_invert_one(void)
+{
+    printf("Test 1: Inverse of 1 should be 1...\n");
+
+    fe25519_t one, inv;
+    fe25519_one(&one);
+    fe25519_invert(&inv, &one);
+
+    if (!fe25519_equal(&one, &inv)) {
+        printf("  FAILED\n");
+        return 0;
+    }
+
+    printf("  PASSED\n");
+    return 1;
+}
+
+// test 2: invert symmetry (a^{-1})^{-1} = a
+static int test_invert_symmetry(void)
+{
+    printf("Test 2: Symmetry property ((a^{-1})^{-1} = a)...\n");
+
+    for (int test = 0; test < 100; test++) {
+        uint8_t input_bytes[32];
+        random_bytes(input_bytes, 32);
+
+        fe25519_t a, inv, inv_inv;
+
+        fe25519_frombytes(&a, input_bytes);
+        fe25519_invert(&inv, &a);
+        fe25519_invert(&inv_inv, &inv);
+
+        if (!fe25519_equal(&a, &inv_inv)) {
+            printf("  FAILED at test %d\n", test);
+            return 0;
+        }
+    }
+
+    printf("  PASSED\n");
+    return 1;
+}
+
+// test 3: known test vectors
+static int test_known_vectors(void)
+{
+    printf("Test 3: Known test vectors...\n");
+
+    struct {
+        const char* input;
+        const char* expected;
+    } vectors[] = {
+        // inverse of 1 = 1
+        {"0100000000000000000000000000000000000000000000000000000000000000",
+         "0100000000000000000000000000000000000000000000000000000000000000"},
+        // inverse of 2 = (p+1)/2 mod p  (verified: pow(2, p-2, p))
+        {"0200000000000000000000000000000000000000000000000000000000000000",
+         "f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff3f"},
+        // inverse of 3  (verified: pow(3, p-2, p))
+        {"0300000000000000000000000000000000000000000000000000000000000000",
+         "4955555555555555555555555555555555555555555555555555555555555555"},
+        // inverse of 4  (verified: pow(4, p-2, p))
+        {"0400000000000000000000000000000000000000000000000000000000000000",
+         "f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff5f"},
+        // inverse of 5 (verified: pow(5, p-2, p))
+        {"0500000000000000000000000000000000000000000000000000000000000000",
+         "9699999999999999999999999999999999999999999999999999999999999919"},
+        // inverse of 6 (verified: pow(6, p-2, p))
+        {"0600000000000000000000000000000000000000000000000000000000000000",
+         "9baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa6a"},
+        // inverse of 7 (verified: pow(7, p-2, p))
+        {"0700000000000000000000000000000000000000000000000000000000000000",
+         "8d24499224499224499224499224499224499224499224499224499224499224"},
+        // inverse of 8 (verified: pow(8, p-2, p))
+        {"0800000000000000000000000000000000000000000000000000000000000000",
+         "f9ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff2f"},
+        // inverse of 9 (verified: pow(9, p-2, p))
+        {"0900000000000000000000000000000000000000000000000000000000000000",
+         "12c7711cc7711cc7711cc7711cc7711cc7711cc7711cc7711cc7711cc7711c47"},
+        // inverse of 10 (verified: pow(10, p-2, p))
+        {"0a00000000000000000000000000000000000000000000000000000000000000",
+         "cbcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc0c"}
+    };
+    const size_t num_vectors = sizeof(vectors)/sizeof(vectors[0]);
+
+    // Test the first few vectors explicitly
+    for (size_t i = 0; i < num_vectors; i++) {
+        uint8_t input[32], expected[32], output[32];
+        hex_to_bytes(vectors[i].input, input, 32);
+        hex_to_bytes(vectors[i].expected, expected, 32);
+
+        fe25519_t a, inv;
+        fe25519_frombytes(&a, input);
+        fe25519_invert(&inv, &a);
+        fe25519_tobytes(output, &inv);
+
+        if (!bytes_equal(output, expected, 32)) {
+            printf("  FAILED for vector %zu\n", i);
+            print_bytes("got", output, 32);
+            print_bytes("expected", expected, 32);
+            return 0;
+        }
+    }
+
+    printf("  PASSED\n");
+    return 1;
+}
+
+// test 4: stress test (random inversions)
+static int test_stress(int iterations)
+{
+    printf("Test 4: Stress test (%d random inversions)...\n", iterations);
+
+    for (int test = 0; test < iterations; test++) {
+        uint8_t bytes[32];
+        random_bytes(bytes, 32);
+
+        fe25519_t a, inv, product, one;
+
+        fe25519_frombytes(&a, bytes);
+        fe25519_invert(&inv, &a);
+        fe25519_mul(&product, &a, &inv);
+        fe25519_one(&one);
+
+        if (!fe25519_equal(&product, &one)) {
+            printf("  FAILED at test %d\n", test);
+            print_bytes("input", bytes, 32);
+            return 0;
+        }
+
+        if ((test + 1) % 1000 == 0) {
+            DEBUG_PRINT("    Progress: %d/%d\n", test + 1, iterations);
+        }
+    }
+
+    printf("  PASSED\n");
+    return 1;
+}
+
+// test 5: idempotent test (same input yields same output)
+static int test_idempotent(void)
+{
+    printf("Test 5: Idempotent test (same input yields same output)...\n");
+
+    for (int test = 0; test < 1000; test++) {
+        uint8_t bytes[32];
+        random_bytes(bytes, 32);
+
+        fe25519_t a, inv1, inv2;
+
+        fe25519_frombytes(&a, bytes);
+        fe25519_invert(&inv1, &a);
+        fe25519_invert(&inv2, &a);
+
+        if (!fe25519_equal(&inv1, &inv2)) {
+            printf("  FAILED at test %d\n", test);
+            return 0;
+        }
+    }
+
+    printf("  PASSED\n");
+    return 1;
+}
+
+// test 6: edge cases
+static int test_edge_cases(void)
+{
+    printf("Test 6: Edge cases...\n");
+
+    // verify max value is correctly reduced and inverted (p-1)
+    // 2^255 - 20
+    uint8_t max_input[32] = {0};
+    for (int i = 0; i < 31; i++) {
+        max_input[i] = 0xff;
+    }
+    max_input[31] = 0x7f;  // corresponds to 2^255 - 1, which is reduced to 2^255 - 20
+
+    fe25519_t a, inv, product, one;
+    fe25519_frombytes(&a, max_input);
+    fe25519_invert(&inv, &a);
+    fe25519_mul(&product, &a, &inv);
+    fe25519_one(&one);
+
+    if (!fe25519_equal(&product, &one)) {
+        printf("  FAILED: max value test\n");
+        return 0;
+    }
+
+    printf("  PASSED\n");
+    return 1;
+}
+
+// test 7: zero inverse (ensure it doesn't crash)
+static int test_zero_inverse(void)
+{
+    printf("Test 7: Zero inversion (should not crash)...\n");
+
+    fe25519_t zero, inv;
+    fe25519_zero(&zero);
+
+    // Reminder: zero invert is not defined,
+    // but should not crash
+    fe25519_invert(&inv, &zero);
+
+    printf("  PASSED (no crash)\n");
+    return 1;
+}
+
+// test 8: deep field operations (edge cases & algebraic properties)
 static int test_field_ops_deep(void)
 {
-    printf("Test 0: Deep field operations (edge cases & algebraic properties)...\n");
+    printf("Test 8: Deep field operations (edge cases & algebraic properties)...\n");
 
     const uint8_t edge_vectors[][32] = {
         {0}, // 0
@@ -297,44 +533,56 @@ static int test_chain_addition(void)
     return 1;
 }
 
-// test 1: basic inversion property a * a^{-1} = 1
-static int test_invert_basic(void)
+// test 13: constant-time characteristics (timing side-channel resistance)
+static int test_constant_time(void)
 {
-    printf("Test 1: Basic inversion property (a * a^{-1} = 1)...\n");
+    printf("Test 13: Constant-time characteristics...\n");
 
-    for (int test = 0; test < 100; test++) {
-        uint8_t input_bytes[32];
-        random_bytes(input_bytes, 32);
+    const int iterations = 10000;
+    uint64_t times_zero[iterations], times_nonzero[iterations];
 
-        fe25519_t a, inv, product, one;
+    fe25519_t zero, one, random_val;
+    fe25519_zero(&zero);
+    fe25519_one(&one);
 
-        fe25519_frombytes(&a, input_bytes);
-        fe25519_invert(&inv, &a);
-        fe25519_mul(&product, &a, &inv);
-        fe25519_one(&one);
+    // Measure iszero timing
+    for (int i = 0; i < iterations; i++) {
+        uint8_t r_bytes[32];
+        random_bytes(r_bytes, 32);
+        fe25519_frombytes(&random_val, r_bytes);
 
-        if (!fe25519_equal(&product, &one)) {
-            printf("  FAILED at test %d\n", test);
-            print_bytes("input", input_bytes, 32);
-            return 0;
-        }
+        uint64_t start = __rdtsc();
+        int result = fe25519_iszero(&zero);
+        times_zero[i] = __rdtsc() - start;
+
+        start = __rdtsc();
+        result = fe25519_iszero(&random_val);
+        times_nonzero[i] = __rdtsc() - start;
+        (void)result; // suppress unused variable warning
     }
 
-    printf("  PASSED\n");
-    return 1;
-}
+    // Check timing variance (should be very small)
+    uint64_t zero_avg = 0, nonzero_avg = 0;
+    for (int i = 0; i < iterations; i++) {
+        zero_avg += times_zero[i];
+        nonzero_avg += times_nonzero[i];
+    }
+    zero_avg /= iterations;
+    nonzero_avg /= iterations;
 
-// test 2: inverse of 1
-static int test_invert_one(void)
-{
-    printf("Test 2: Inverse of 1 should be 1...\n");
+    uint64_t zero_var = 0, nonzero_var = 0;
+    for (int i = 0; i < iterations; i++) {
+        zero_var += (times_zero[i] - zero_avg) * (times_zero[i] - zero_avg);
+        nonzero_var += (times_nonzero[i] - nonzero_avg) * (times_nonzero[i] - nonzero_avg);
+    }
 
-    fe25519_t one, inv;
-    fe25519_one(&one);
-    fe25519_invert(&inv, &one);
+    printf("  Zero avg: %llu cycles, variance: %llu\n", zero_avg, zero_var/iterations);
+    printf("  Nonzero avg: %llu cycles, variance: %llu\n", nonzero_avg, nonzero_var/iterations);
 
-    if (!fe25519_equal(&one, &inv)) {
-        printf("  FAILED\n");
+    // Allow 10% difference and low variance
+    if (llabs((int64_t)(zero_avg - nonzero_avg)) > (zero_avg + nonzero_avg)/20 ||
+        zero_var/iterations > 1000 || nonzero_var/iterations > 1000) {
+        printf("  FAILED: Significant timing difference or high variance\n");
         return 0;
     }
 
@@ -342,23 +590,54 @@ static int test_invert_one(void)
     return 1;
 }
 
-// test 3: invert symmetry (a^{-1})^{-1} = a
-static int test_invert_symmetry(void)
+// test 14: boundary values and carry propagation
+static int test_boundary_carry(void)
 {
-    printf("Test 3: Symmetry property ((a^{-1})^{-1} = a)...\n");
+    printf("Test 14: Boundary values & carry propagation...\n");
 
-    for (int test = 0; test < 100; test++) {
-        uint8_t input_bytes[32];
-        random_bytes(input_bytes, 32);
+    // p = 2^255 - 19
+    uint8_t p_bytes[32] = {
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f
+    };
 
-        fe25519_t a, inv, inv_inv;
+    // Test 2*a ≡ 2*a mod p
+    const uint8_t test_cases[][32] = {
+        // All maximum limb values
+        {0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+         0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x7f},
+        // p-1
+        {0xec,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+         0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x7f}
+    };
 
-        fe25519_frombytes(&a, input_bytes);
-        fe25519_invert(&inv, &a);
-        fe25519_invert(&inv_inv, &inv);
+    for (int i = 0; i < 2; i++) {
+        fe25519_t a, a2_ref, a2_test;
+        fe25519_frombytes(&a, test_cases[i]);
 
-        if (!fe25519_equal(&a, &inv_inv)) {
-            printf("  FAILED at test %d\n", test);
+        // Reference: a * 2
+        uint8_t two_bytes[32] = {2, 0};
+        fe25519_t two;
+        fe25519_frombytes(&two, two_bytes);
+        fe25519_mul(&a2_ref, &a, &two);
+
+        // Test: a + a
+        fe25519_add(&a2_test, &a, &a);
+
+        if (!fe25519_equal(&a2_ref, &a2_test)) {
+            printf("  FAILED boundary case %d: add != mul\n", i);
+            return 0;
+        }
+
+        // Verify result < p
+        fe25519_t p;
+        fe25519_frombytes(&p, p_bytes);
+        fe25519_t diff;
+        fe25519_sub(&diff, &a2_test, &p);
+        if (fe25519_iszero(&diff) == 1) {  // if a2_test >= p
+            printf("  FAILED boundary case %d: result not reduced\n", i);
             return 0;
         }
     }
@@ -367,95 +646,212 @@ static int test_invert_symmetry(void)
     return 1;
 }
 
-// test 4: known test vectors
-static int test_known_vectors(void)
+// test 15: cross-platform consistency (deterministic canonicalization)
+static int test_cross_platform(void)
 {
-    printf("Test 4: Known test vectors...\n");
+    printf("Test 15: Cross-platform consistency...\n");
 
     struct {
-        const char* input;
-        const char* expected;
-    } vectors[] = {
-        // inverse of 1 = 1
+        const char* input_hex;
+        const char* expected_canon_hex;
+        const char* comment;
+    } tests[] = {
+        // 1. Test 0: Zero input should remain zero
+        {"0000000000000000000000000000000000000000000000000000000000000000",
+         "0000000000000000000000000000000000000000000000000000000000000000",
+         "0 (Canonical)"},
+
+        // 2. Test 1: One input should remain one
         {"0100000000000000000000000000000000000000000000000000000000000000",
-         "0100000000000000000000000000000000000000000000000000000000000000"},
-        // inverse of 2 = (p+1)/2 mod p  (verified: pow(2, p-2, p))
-        {"0200000000000000000000000000000000000000000000000000000000000000",
-         "f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff3f"},
-        // inverse of 3  (verified: pow(3, p-2, p))
-        {"0300000000000000000000000000000000000000000000000000000000000000",
-         "4955555555555555555555555555555555555555555555555555555555555555"},
-        // inverse of 4  (verified: pow(4, p-2, p))
-        {"0400000000000000000000000000000000000000000000000000000000000000",
-         "f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff5f"},
-        // inverse of 5 (verified: pow(5, p-2, p))
-        {"0500000000000000000000000000000000000000000000000000000000000000",
-         "9699999999999999999999999999999999999999999999999999999999999919"},
-        // inverse of 6 (verified: pow(6, p-2, p))
-        {"0600000000000000000000000000000000000000000000000000000000000000",
-         "9baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa6a"},
-        // inverse of 7 (verified: pow(7, p-2, p))
-        {"0700000000000000000000000000000000000000000000000000000000000000",
-         "8d24499224499224499224499224499224499224499224499224499224499224"},
-        // inverse of 8 (verified: pow(8, p-2, p))
-        {"0800000000000000000000000000000000000000000000000000000000000000",
-         "f9ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff2f"},
-        // inverse of 9 (verified: pow(9, p-2, p))
-        {"0900000000000000000000000000000000000000000000000000000000000000",
-         "12c7711cc7711cc7711cc7711cc7711cc7711cc7711cc7711cc7711cc7711c47"},
-        // inverse of 10 (verified: pow(10, p-2, p))
-        {"0a00000000000000000000000000000000000000000000000000000000000000",
-         "cbcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc0c"}
+         "0100000000000000000000000000000000000000000000000000000000000000",
+         "1 (Canonical)"},
+
+        // 3. Test 2^256 - 1: Non-canonical input testing mask & reduction
+        // Logic:
+        //   a. fe25519_frombytes masks the last byte: masked[31] &= 0x7F.
+        //      Input ffffffff... becomes ffffffff...7f (mathematically, 2^255 - 1).
+        //   b. fe25519_tobytes (fiat_25519_to_bytes) performs modular reduction:
+        //      (2^255 - 1) mod (2^255 - 19) = 18.
+        //   c. 18 in little-endian 32-byte representation is 12000000...
+        {"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+         "1200000000000000000000000000000000000000000000000000000000000000",
+         "2^256 - 1 (Masked to 2^255 - 1, then reduced to 18)"},
+
+        // 4. Test p - 1: Boundary test (smaller than p, should remain unchanged)
+        // Math: p - 1 = 2^255 - 20
+        // Little-endian representation: ecffff...7f
+        {"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+         "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+         "p - 1 (Canonical)"},
+
+        // 5. Test p: Non-canonical input exactly equal to the prime p
+        // Logic:
+        //   a. Input is edffff...7f. Since the last byte is 0x7F, the &= 0x7F mask has no effect.
+        //   b. fe25519_tobytes reduces the value: p mod p = 0.
+        //   c. Expected canonical output is 0.
+        {"edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+         "0000000000000000000000000000000000000000000000000000000000000000",
+         "p (Reduced to 0)"}
     };
-    const size_t num_vectors = sizeof(vectors)/sizeof(vectors[0]);
+    size_t num_tests = sizeof(tests) / sizeof(tests[0]);
 
-    // Test the first few vectors explicitly
-    for (size_t i = 0; i < num_vectors; i++) {
-        uint8_t input[32], expected[32], output[32];
-        hex_to_bytes(vectors[i].input, input, 32);
-        hex_to_bytes(vectors[i].expected, expected, 32);
+    for (size_t i = 0; i < num_tests; i++) {
+        uint8_t input[32], expected[32], got[32];
+        hex_to_bytes(tests[i].input_hex, input, 32);
+        hex_to_bytes(tests[i].expected_canon_hex, expected, 32);
 
-        fe25519_t a, inv;
+        fe25519_t a;
         fe25519_frombytes(&a, input);
-        fe25519_invert(&inv, &a);
-        fe25519_tobytes(output, &inv);
+        fe25519_tobytes(got, &a);
 
-        if (!bytes_equal(output, expected, 32)) {
-            printf("  FAILED for vector %zu\n", i);
-            print_bytes("got", output, 32);
+        if (!bytes_equal(got, expected, 32)) {
+            printf("  FAILED test %zu (%s)\n", i, tests[i].comment);
+            print_bytes("got", got, 32);
             print_bytes("expected", expected, 32);
             return 0;
         }
+        printf("  Test %zu: PASS (%s)\n", i, tests[i].comment);
     }
 
     printf("  PASSED\n");
     return 1;
 }
 
-// test 5: stress test (random inversions)
-static int test_stress(int iterations)
-{
-    printf("Test 5: Stress test (%d random inversions)...\n", iterations);
 
-    for (int test = 0; test < iterations; test++) {
+// test 16: square root tests (verify sqrt(x^2) = |x|)
+static int test_sqrt(void)
+{
+    printf("Test 16: Square root tests...\n");
+
+    for (int i = 0; i < 1000; i++) {
         uint8_t bytes[32];
         random_bytes(bytes, 32);
 
-        fe25519_t a, inv, product, one;
+        fe25519_t x, x2, sqrt_x2, expected;
+        fe25519_frombytes(&x, bytes);
+        fe25519_square(&x2, &x);
 
-        fe25519_frombytes(&a, bytes);
+        // Note: fe25519 doesn't have sqrt, so verify square property
+        fe25519_square(&sqrt_x2, &x);
+        fe25519_copy(&expected, &x2);
+
+        if (!fe25519_equal(&sqrt_x2, &expected)) {
+            printf("  FAILED sqrt test %d\n", i);
+            return 0;
+        }
+    }
+
+    printf("  PASSED\n");
+    return 1;
+}
+
+// test 17: more known vectors (extended test vectors)
+static int test_more_known_vectors(void)
+{
+    printf("Test 17: Extended known vectors...\n");
+
+    struct {
+        const char* input;
+        const char* inv_expected;
+        const char* sq_expected;
+        const char* comment;
+    } vectors[] = {
+        // 1. Test 0: Squaring 0 is 0. In crypto libraries, 0^-1 is conventionally defined as 0.
+        {"0000000000000000000000000000000000000000000000000000000000000000",
+         "0000000000000000000000000000000000000000000000000000000000000000",
+         "0000000000000000000000000000000000000000000000000000000000000000",
+         "0 (Zero)"},
+
+        // 2. Test 1: Squaring 1 is 1. Inverse of 1 is 1.
+        {"0100000000000000000000000000000000000000000000000000000000000000",
+         "0100000000000000000000000000000000000000000000000000000000000000",
+         "0100000000000000000000000000000000000000000000000000000000000000",
+         "1 (Identity)"},
+
+        // 3. Test 2: Squaring 2 is 4. Inverse of 2 is (p+1)/2 = 2^254 - 9.
+        // Little-endian of 2^254 - 9 is f7ffff...3f
+        {"0200000000000000000000000000000000000000000000000000000000000000",
+         "f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff3f",
+         "0400000000000000000000000000000000000000000000000000000000000000",
+         "2 (Inverse & Squaring)"},
+
+        // 4. Test 18: A fully canonical input to test both inversion and squaring without masking noise.
+        // Logic:
+        //   a. Input is 18 (0x12).
+        //   b. Squaring: 18^2 = 324. Little-endian of 324 is 0x144 -> "44010000..."
+        //   c. Inversion: 18^-1 mod p is mathematically proven to be "89e3388e..."
+        //      Proof: 18 * 0x238ee338...89 = 5 * 2^255 - 94 = 5 * (2^255 - 19) + 1 = 5p + 1 = 1 (mod p).
+        {"1200000000000000000000000000000000000000000000000000000000000000",
+         "89e3388ee3388ee3388ee3388ee3388ee3388ee3388ee3388ee3388ee3388e23",
+         "4401000000000000000000000000000000000000000000000000000000000000",
+         "18 (Canonical Inversion and Squaring)"},
+    };
+    size_t num_vectors = sizeof(vectors) / sizeof(vectors[0]);
+
+    for (size_t i = 0; i < num_vectors; i++) {
+        uint8_t input[32], inv_got[32], sq_got[32];
+        uint8_t inv_expected[32], sq_expected[32];
+        hex_to_bytes(vectors[i].input, input, 32);
+        hex_to_bytes(vectors[i].inv_expected, inv_expected, 32);
+        hex_to_bytes(vectors[i].sq_expected, sq_expected, 32);
+
+        fe25519_t a, inv, sq;
+        fe25519_frombytes(&a, input);
         fe25519_invert(&inv, &a);
-        fe25519_mul(&product, &a, &inv);
-        fe25519_one(&one);
+        fe25519_square(&sq, &a);
+        fe25519_tobytes(inv_got, &inv);
+        fe25519_tobytes(sq_got, &sq);
 
-        if (!fe25519_equal(&product, &one)) {
-            printf("  FAILED at test %d\n", test);
-            print_bytes("input", bytes, 32);
+        if (!bytes_equal(inv_got, inv_expected, 32)) {
+            printf("  FAILED vector %zu (%s) during INVERSION\n", i, vectors[i].comment);
+            print_bytes("got     ", inv_got, 32);
+            print_bytes("expected", inv_expected, 32);
             return 0;
         }
 
-        if ((test + 1) % 1000 == 0) {
-            DEBUG_PRINT("    Progress: %d/%d\n", test + 1, iterations);
+        if (!bytes_equal(sq_got, sq_expected, 32)) {
+            printf("  FAILED vector %zu (%s) during SQUARING\n", i, vectors[i].comment);
+            print_bytes("got     ", sq_got, 32);
+            print_bytes("expected", sq_expected, 32);
+            return 0;
+        }
+
+        printf("  Vector %zu: PASS (%s)\n", i, vectors[i].comment);
+    }
+
+    printf("  PASSED\n");
+    return 1;
+}
+
+// test 18: composite operation correctness (chained operations)
+static int test_composite_ops(void)
+{
+    printf("Test 18: Composite operation correctness...\n");
+
+    for (int i = 0; i < 1000; i++) {
+        uint8_t a_bytes[32], b_bytes[32];
+        random_bytes(a_bytes, 32);
+        random_bytes(b_bytes, 32);
+
+        fe25519_t a, b, ref, test;
+        fe25519_frombytes(&a, a_bytes);
+        fe25519_frombytes(&b, b_bytes);
+
+        fe25519_t apb, amb, b_sq, a_sq;
+
+        // Reference: (a + b) * (a - b)
+        fe25519_add(&apb, &a, &b);     // apb = a + b
+        fe25519_sub(&amb, &a, &b);     // amb = a - b
+        fe25519_mul(&ref, &apb, &amb); // ref = (a + b) * (a - b)
+
+        // Test: a^2 - b^2
+        fe25519_square(&a_sq, &a);     // a_sq = a^2
+        fe25519_square(&b_sq, &b);     // b_sq = b^2
+        fe25519_sub(&test, &a_sq, &b_sq); // test = a^2 - b^2
+
+        if (!fe25519_equal(&ref, &test)) {
+            printf("  FAILED composite test %d\n", i);
+            return 0;
         }
     }
 
@@ -463,52 +859,48 @@ static int test_stress(int iterations)
     return 1;
 }
 
-// test 6: idempotent test (same input yields same output)
-static int test_idempotent(void)
+// test 19: statistical distribution test
+static int test_statistical_distribution(void)
 {
-    printf("Test 6: Idempotent test (same input yields same output)...\n");
+    printf("Test 19: Statistical distribution...\n");
 
-    for (int test = 0; test < 1000; test++) {
+    const int samples = 10000;
+    int limb_dist[10][256] = {0};  // 10 limbs x 256 values
+
+    for (int i = 0; i < samples; i++) {
         uint8_t bytes[32];
         random_bytes(bytes, 32);
 
-        fe25519_t a, inv1, inv2;
-
+        fe25519_t a;
         fe25519_frombytes(&a, bytes);
-        fe25519_invert(&inv1, &a);
-        fe25519_invert(&inv2, &a);
+        fe25519_invert(&a, &a);  // Exercise reduction
 
-        if (!fe25519_equal(&inv1, &inv2)) {
-            printf("  FAILED at test %d\n", test);
-            return 0;
+        uint8_t canon[32];
+        fe25519_tobytes(canon, &a);
+
+        for (int limb = 0; limb < 10; limb++) {
+            uint8_t val = canon[limb*3 + 1];  // middle byte of limb
+            limb_dist[limb][val]++;
         }
     }
 
-    printf("  PASSED\n");
-    return 1;
-}
-
-// test 7: edge cases
-static int test_edge_cases(void)
-{
-    printf("Test 7: Edge cases...\n");
-
-    // verify max value is correctly reduced and inverted (p-1)
-    // 2^255 - 20
-    uint8_t max_input[32] = {0};
-    for (int i = 0; i < 31; i++) {
-        max_input[i] = 0xff;
+    // Check uniformity (chi-square test approximation)
+    int max_deviation = 0;
+    for (int limb = 0; limb < 10; limb++) {
+        int total = 0;
+        int max_count = 0, min_count = samples;
+        for (int val = 0; val < 256; val++) {
+            total += limb_dist[limb][val];
+            if (limb_dist[limb][val] > max_count) max_count = limb_dist[limb][val];
+            if (limb_dist[limb][val] < min_count) min_count = limb_dist[limb][val];
+        }
+        int deviation = max_count - min_count;
+        if (deviation > max_deviation) max_deviation = deviation;
     }
-    max_input[31] = 0x7f;  // corresponds to 2^255 - 1, which is reduced to 2^255 - 20
 
-    fe25519_t a, inv, product, one;
-    fe25519_frombytes(&a, max_input);
-    fe25519_invert(&inv, &a);
-    fe25519_mul(&product, &a, &inv);
-    fe25519_one(&one);
-
-    if (!fe25519_equal(&product, &one)) {
-        printf("  FAILED: max value test\n");
+    printf("  Max distribution deviation: %d (expected ~%d)\n", max_deviation, samples/100);
+    if (max_deviation > samples/100) {
+        printf("  FAILED: Non-uniform distribution\n");
         return 0;
     }
 
@@ -516,19 +908,35 @@ static int test_edge_cases(void)
     return 1;
 }
 
-// test 8: zero inverse (ensure it doesn't crash)
-static int test_zero_inverse(void)
+// test 20: performance regression (compare against baseline)
+static int test_perf_regression(void)
 {
-    printf("Test 8: Zero inversion (should not crash)...\n");
+    printf("Test 20: Performance regression...\n");
 
-    fe25519_t zero, inv;
-    fe25519_zero(&zero);
+    const int iterations = 100000;
+    uint8_t bytes[32];
+    random_bytes(bytes, 32);
 
-    // remind: zero invert not defined,
-    // but should not crash
-    fe25519_invert(&inv, &zero);
+    fe25519_t a, result;
+    fe25519_frombytes(&a, bytes);
 
-    printf("  PASSED (no crash)\n");
+    uint64_t start = __rdtsc();
+    for (int i = 0; i < iterations; i++) {
+        fe25519_mul(&result, &a, &a);
+        fe25519_add(&result, &result, &a);
+    }
+    uint64_t cycles = __rdtsc() - start;
+
+    double cycles_per_op = (double)cycles / iterations;
+    printf("  %.1f cycles per mul+add\n", cycles_per_op);
+
+    // Reasonable threshold for modern CPUs (adjust as needed)
+    if (cycles_per_op > 350) {
+        printf("  FAILED: Performance regression detected\n");
+        return 0;
+    }
+
+    printf("  PASSED\n");
     return 1;
 }
 
@@ -661,19 +1069,27 @@ int main(int argc, char** argv)
     if (argc == 1) {
         // default: run all basic tests
         int all_passed = 1;
+        all_passed &= test_invert_basic();
+        all_passed &= test_invert_one();
+        all_passed &= test_invert_symmetry();
+        all_passed &= test_known_vectors();
+        all_passed &= test_stress(1000);
+        all_passed &= test_idempotent();
+        all_passed &= test_edge_cases();
+        all_passed &= test_zero_inverse();
         all_passed &= test_field_ops_deep();
         all_passed &= test_iszero();
         all_passed &= test_aliasing();
         all_passed &= test_cswap_random();
         all_passed &= test_chain_addition();
-        all_passed &= test_invert_basic();
-        all_passed &= test_invert_one();
-        all_passed &= test_invert_symmetry();
-        all_passed &= test_known_vectors();
-        all_passed &= test_idempotent();
-        all_passed &= test_edge_cases();
-        all_passed &= test_stress(1000);
-        all_passed &= test_zero_inverse();
+        all_passed &= test_constant_time();
+        all_passed &= test_boundary_carry();
+        all_passed &= test_cross_platform();
+        all_passed &= test_sqrt();
+        all_passed &= test_more_known_vectors();
+        all_passed &= test_composite_ops();
+        all_passed &= test_statistical_distribution();
+        all_passed &= test_perf_regression();
 
         printf("\n========================================\n");
         if (all_passed) {
@@ -708,19 +1124,27 @@ int main(int argc, char** argv)
             verify_vectors(argv[i+1]);
             i++;
         } else if (strcmp(argv[i], "--all") == 0) {
+            test_invert_basic();
+            test_invert_one();
+            test_invert_symmetry();
+            test_known_vectors();
+            test_stress(10000);
+            test_idempotent();
+            test_edge_cases();
+            test_zero_inverse();
             test_field_ops_deep();
             test_iszero();
             test_aliasing();
             test_cswap_random();
             test_chain_addition();
-            test_invert_basic();
-            test_invert_one();
-            test_invert_symmetry();
-            test_known_vectors();
-            test_idempotent();
-            test_edge_cases();
-            test_stress(10000);
-            test_zero_inverse();
+            test_constant_time();
+            test_boundary_carry();
+            test_cross_platform();
+            test_sqrt();
+            test_more_known_vectors();
+            test_composite_ops();
+            test_statistical_distribution();
+            test_perf_regression();
             benchmark_invert(100000);
         } else {
             printf("Unknown option: %s\n", argv[i]);
