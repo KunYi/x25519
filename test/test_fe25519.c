@@ -65,6 +65,101 @@ static void hex_to_bytes(const char* hex, uint8_t* bytes, size_t len)
 
 /* ========== test cases ========== */
 
+// test 0: deep field operations (edge cases & algebraic properties)
+static int test_field_ops_deep(void)
+{
+    printf("Test 0: Deep field operations (edge cases & algebraic properties)...\n");
+
+    const uint8_t edge_vectors[][32] = {
+        {0}, // 0
+        {1}, // 1
+        {2}, // 2
+        {0xeb, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f}, // p-2
+        {0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f}, // p-1
+        {0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f}, // p
+        {0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f}, // p+1
+        {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f}, // 2^255-1
+        {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}  // 2^256-1
+    };
+    int num_edges = sizeof(edge_vectors) / sizeof(edge_vectors[0]);
+
+    // Test operations on edge cases
+    for (int i = 0; i < num_edges; i++) {
+        for (int j = 0; j < num_edges; j++) {
+            fe25519_t a, b, c, d, zero;
+            fe25519_frombytes(&a, edge_vectors[i]);
+            fe25519_frombytes(&b, edge_vectors[j]);
+            fe25519_zero(&zero);
+
+            fe25519_add(&c, &a, &b);
+            fe25519_add(&d, &b, &a);
+            if (!fe25519_equal(&c, &d)) { printf("  FAILED commutativity at i=%d, j=%d\n", i, j); return 0; }
+
+            fe25519_sub(&c, &c, &b);
+            if (!fe25519_equal(&c, &a)) {
+                printf("  FAILED subtraction at i=%d, j=%d\n", i, j);
+                print_bytes("  a", edge_vectors[i], 32);
+                print_bytes("  b", edge_vectors[j], 32);
+                uint8_t c_bytes[32]; fe25519_tobytes(c_bytes, &c);
+                uint8_t a_bytes[32]; fe25519_tobytes(a_bytes, &a);
+                print_bytes("  a (canon)", a_bytes, 32);
+                print_bytes("  (a+b)-b", c_bytes, 32);
+                return 0;
+            }
+
+            fe25519_neg(&c, &a);
+            fe25519_add(&d, &a, &c);
+            if (!fe25519_equal(&d, &zero)) { printf("  FAILED negation\n"); return 0; }
+
+            fe25519_mul(&c, &a, &b);
+            fe25519_mul(&d, &b, &a);
+            if (!fe25519_equal(&c, &d)) { printf("  FAILED mul commutativity\n"); return 0; }
+
+            fe25519_t ca, cb;
+            fe25519_copy(&ca, &a);
+            fe25519_copy(&cb, &b);
+            fe25519_cswap(&ca, &cb, 1);
+            if (!fe25519_equal(&ca, &b) || !fe25519_equal(&cb, &a)) { printf("  FAILED cswap\n"); return 0; }
+        }
+
+        fe25519_t a, sq1, sq2;
+        fe25519_frombytes(&a, edge_vectors[i]);
+        fe25519_square(&sq1, &a);
+        fe25519_mul(&sq2, &a, &a);
+        if (!fe25519_equal(&sq1, &sq2)) { printf("  FAILED square\n"); return 0; }
+
+        fe25519_t mul1, mul2, c121666;
+        uint8_t c_bytes[32] = {0};
+        uint32_t val = 121666;
+        c_bytes[0] = val & 0xFF; c_bytes[1] = (val >> 8) & 0xFF;
+        c_bytes[2] = (val >> 16) & 0xFF; c_bytes[3] = (val >> 24) & 0xFF;
+        fe25519_frombytes(&c121666, c_bytes);
+
+        fe25519_copy(&mul1, &a);
+        fe25519_mul121666(&mul1, &mul1);
+        fe25519_mul(&mul2, &a, &c121666);
+        if (!fe25519_equal(&mul1, &mul2)) { printf("  FAILED mul121666\n"); return 0; }
+    }
+
+    for (int test = 0; test < 1000; test++) {
+        uint8_t b1[32], b2[32], b3[32];
+        random_bytes(b1, 32); random_bytes(b2, 32); random_bytes(b3, 32);
+
+        fe25519_t a, b, c, t1, t2, t3;
+        fe25519_frombytes(&a, b1); fe25519_frombytes(&b, b2); fe25519_frombytes(&c, b3);
+
+        fe25519_mul(&t1, &a, &b); fe25519_mul(&t1, &t1, &c);
+        fe25519_mul(&t2, &b, &c); fe25519_mul(&t2, &a, &t2);
+        if (!fe25519_equal(&t1, &t2)) { printf("  FAILED associativity\n"); return 0; }
+
+        fe25519_add(&t1, &b, &c); fe25519_mul(&t1, &a, &t1);
+        fe25519_mul(&t2, &a, &b); fe25519_mul(&t3, &a, &c); fe25519_add(&t2, &t2, &t3);
+        if (!fe25519_equal(&t1, &t2)) { printf("  FAILED distributivity\n"); return 0; }
+    }
+    printf("  PASSED\n");
+    return 1;
+}
+
 // test 1: basic inversion property a * a^{-1} = 1
 static int test_invert_basic(void)
 {
@@ -156,9 +251,29 @@ static int test_known_vectors(void)
         // inverse of 4  (verified: pow(4, p-2, p))
         {"0400000000000000000000000000000000000000000000000000000000000000",
          "f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff5f"},
+        // inverse of 5 (verified: pow(5, p-2, p))
+        {"0500000000000000000000000000000000000000000000000000000000000000",
+         "9699999999999999999999999999999999999999999999999999999999999919"},
+        // inverse of 6 (verified: pow(6, p-2, p))
+        {"0600000000000000000000000000000000000000000000000000000000000000",
+         "9baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa6a"},
+        // inverse of 7 (verified: pow(7, p-2, p))
+        {"0700000000000000000000000000000000000000000000000000000000000000",
+         "8d24499224499224499224499224499224499224499224499224499224499224"},
+        // inverse of 8 (verified: pow(8, p-2, p))
+        {"0800000000000000000000000000000000000000000000000000000000000000",
+         "f9ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff2f"},
+        // inverse of 9 (verified: pow(9, p-2, p))
+        {"0900000000000000000000000000000000000000000000000000000000000000",
+         "12c7711cc7711cc7711cc7711cc7711cc7711cc7711cc7711cc7711cc7711c47"},
+        // inverse of 10 (verified: pow(10, p-2, p))
+        {"0a00000000000000000000000000000000000000000000000000000000000000",
+         "cbcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc0c"}
     };
+    const size_t num_vectors = sizeof(vectors)/sizeof(vectors[0]);
 
-    for (size_t i = 0; i < sizeof(vectors)/sizeof(vectors[0]); i++) {
+    // Test the first few vectors explicitly
+    for (size_t i = 0; i < num_vectors; i++) {
         uint8_t input[32], expected[32], output[32];
         hex_to_bytes(vectors[i].input, input, 32);
         hex_to_bytes(vectors[i].expected, expected, 32);
@@ -409,6 +524,7 @@ int main(int argc, char** argv)
     if (argc == 1) {
         // default: run all basic tests
         int all_passed = 1;
+        all_passed &= test_field_ops_deep();
         all_passed &= test_invert_basic();
         all_passed &= test_invert_one();
         all_passed &= test_invert_symmetry();
@@ -451,6 +567,7 @@ int main(int argc, char** argv)
             verify_vectors(argv[i+1]);
             i++;
         } else if (strcmp(argv[i], "--all") == 0) {
+            test_field_ops_deep();
             test_invert_basic();
             test_invert_one();
             test_invert_symmetry();
