@@ -253,7 +253,10 @@ FE25519_INLINE void fe25519_cswap(fe25519_t* a, fe25519_t* b, uint32_t swap)
  */
 FE25519_INLINE void fe25519_frombytes(fe25519_t* out, const uint8_t in[32])
 {
-    fiat_25519_from_bytes(out->v, in);
+    uint8_t masked[32];
+    memcpy(masked, in, 32);
+    masked[31] &= 0x7F;
+    fiat_25519_from_bytes(out->v, masked);
 }
 
 /**
