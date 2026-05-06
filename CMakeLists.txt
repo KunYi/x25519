@@ -31,6 +31,7 @@ endif()
 # main library target
 add_library(fe25519 STATIC
     ${SOURCE_DIR}/fe25519.c
+    ${SOURCE_DIR}/x25519.c
     ${FIAT_SOURCE}
 )
 

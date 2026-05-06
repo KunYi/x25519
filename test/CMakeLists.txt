@@ -52,3 +52,43 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test_vectors.txt)
         COMMAND test_fe25519 --verify-vectors ${CMAKE_CURRENT_SOURCE_DIR}/test_vectors.txt
     )
 endif()
+
+#
+# x25519 test
+#
+add_executable(test_x25519
+    test_x25519.c
+)
+
+target_link_libraries(test_x25519
+   fe25519
+)
+
+target_include_directories(test_x25519 PRIVATE
+    ${INCLUDE_DIR}
+    ${FIAT_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_compile_options(test_x25519 PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+    -Wno-unused-parameter
+)
+
+target_compile_definitions(test_x25519 PRIVATE
+    $<$<CONFIG:Debug>:DEBUG>
+)
+
+#
+# X25519 CTest entries
+#
+add_test(NAME test_x25519_rfc_vectors
+    COMMAND test_x25519
+)
+
+set_tests_properties(test_x25519_rfc_vectors PROPERTIES
+    TIMEOUT 30
+    LABELS "x25519;rfc7748"
+)
