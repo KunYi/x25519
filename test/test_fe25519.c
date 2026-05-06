@@ -160,6 +160,143 @@ static int test_field_ops_deep(void)
     return 1;
 }
 
+// test 9: iszero checks
+static int test_iszero(void)
+{
+    printf("Test 9: IsZero checks...\n");
+    fe25519_t zero, p_val, random_val;
+    fe25519_zero(&zero);
+
+    uint8_t p_bytes[32] = {
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f
+    };
+    fe25519_frombytes(&p_val, p_bytes);
+
+    if (fe25519_iszero(&zero) != 1) { printf("  FAILED: iszero(0) != 1\n"); return 0; }
+    if (fe25519_iszero(&p_val) != 1) { printf("  FAILED: iszero(p) != 1\n"); return 0; }
+
+    uint8_t r_bytes[32];
+    random_bytes(r_bytes, 32);
+    r_bytes[0] |= 1; // ensure non-zero
+    fe25519_frombytes(&random_val, r_bytes);
+    if (fe25519_iszero(&random_val) != 0) {
+        printf("  FAILED: iszero(random) != 0\n"); return 0;
+    }
+
+    printf("  PASSED\n");
+    return 1;
+}
+
+// test 10: aliasing safety
+static int test_aliasing(void)
+{
+    printf("Test 10: Aliasing safety...\n");
+    for (int i=0; i<100; i++) {
+        uint8_t b1[32], b2[32];
+        random_bytes(b1, 32); random_bytes(b2, 32);
+
+        fe25519_t a, b, out_expected, out_aliased;
+        fe25519_frombytes(&a, b1); fe25519_frombytes(&b, b2);
+
+        fe25519_add(&out_expected, &a, &b);
+        fe25519_copy(&out_aliased, &a); fe25519_add(&out_aliased, &out_aliased, &b);
+        if (!fe25519_equal(&out_expected, &out_aliased)) { printf("  FAILED: add(a,a,b)\n"); return 0; }
+
+        fe25519_copy(&out_aliased, &b); fe25519_add(&out_aliased, &a, &out_aliased);
+        if (!fe25519_equal(&out_expected, &out_aliased)) { printf("  FAILED: add(b,a,b)\n"); return 0; }
+
+        fe25519_sub(&out_expected, &a, &b);
+        fe25519_copy(&out_aliased, &a); fe25519_sub(&out_aliased, &out_aliased, &b);
+        if (!fe25519_equal(&out_expected, &out_aliased)) { printf("  FAILED: sub(a,a,b)\n"); return 0; }
+
+        fe25519_copy(&out_aliased, &b); fe25519_sub(&out_aliased, &a, &out_aliased);
+        if (!fe25519_equal(&out_expected, &out_aliased)) { printf("  FAILED: sub(b,a,b)\n"); return 0; }
+
+        fe25519_mul(&out_expected, &a, &b);
+        fe25519_copy(&out_aliased, &a); fe25519_mul(&out_aliased, &out_aliased, &b);
+        if (!fe25519_equal(&out_expected, &out_aliased)) { printf("  FAILED: mul(a,a,b)\n"); return 0; }
+
+        fe25519_copy(&out_aliased, &b); fe25519_mul(&out_aliased, &a, &out_aliased);
+        if (!fe25519_equal(&out_expected, &out_aliased)) { printf("  FAILED: mul(b,a,b)\n"); return 0; }
+
+        fe25519_mul(&out_expected, &a, &a);
+        fe25519_copy(&out_aliased, &a); fe25519_mul(&out_aliased, &out_aliased, &out_aliased);
+        if (!fe25519_equal(&out_expected, &out_aliased)) { printf("  FAILED: mul(a,a,a)\n"); return 0; }
+
+        fe25519_square(&out_expected, &a);
+        fe25519_copy(&out_aliased, &a); fe25519_square(&out_aliased, &out_aliased);
+        if (!fe25519_equal(&out_expected, &out_aliased)) { printf("  FAILED: square(a,a)\n"); return 0; }
+
+        fe25519_invert(&out_expected, &a);
+        fe25519_copy(&out_aliased, &a); fe25519_invert(&out_aliased, &out_aliased);
+        if (!fe25519_equal(&out_expected, &out_aliased)) { printf("  FAILED: invert(a,a)\n"); return 0; }
+    }
+    printf("  PASSED\n");
+    return 1;
+}
+
+// test 11: cswap random flags
+static int test_cswap_random(void)
+{
+    printf("Test 11: cswap (randomization)...\n");
+    for (int i=0; i<1000; i++) {
+        uint8_t b1[32], b2[32];
+        random_bytes(b1, 32); random_bytes(b2, 32);
+
+        fe25519_t a, b, a_orig, b_orig;
+        fe25519_frombytes(&a, b1); fe25519_frombytes(&b, b2);
+        fe25519_copy(&a_orig, &a); fe25519_copy(&b_orig, &b);
+
+        uint32_t swap_flag = random_u32() & 1;
+        fe25519_cswap(&a, &b, swap_flag);
+
+        if (swap_flag) {
+            if (!fe25519_equal(&a, &b_orig) || !fe25519_equal(&b, &a_orig)) {
+                printf("  FAILED: cswap with flag 1\n"); return 0;
+            }
+        } else {
+            if (!fe25519_equal(&a, &a_orig) || !fe25519_equal(&b, &b_orig)) {
+                printf("  FAILED: cswap with flag 0\n"); return 0;
+            }
+        }
+    }
+    printf("  PASSED\n");
+    return 1;
+}
+
+// test 12: chain addition bound checks
+static int test_chain_addition(void)
+{
+    printf("Test 12: Chain addition...\n");
+    uint8_t b1[32];
+    random_bytes(b1, 32);
+
+    fe25519_t a, sum, mul_res;
+    fe25519_frombytes(&a, b1);
+    fe25519_zero(&sum);
+
+    for (int i=0; i<1000; i++) {
+        fe25519_add(&sum, &sum, &a);
+    }
+
+    uint8_t c_bytes[32] = {0};
+    c_bytes[0] = 1000 & 0xFF; c_bytes[1] = (1000 >> 8) & 0xFF;
+    fe25519_t multiplier;
+    fe25519_frombytes(&multiplier, c_bytes);
+
+    fe25519_mul(&mul_res, &a, &multiplier);
+
+    if (!fe25519_equal(&sum, &mul_res)) {
+        printf("  FAILED: Chain addition does not match multiplication\n");
+        return 0;
+    }
+    printf("  PASSED\n");
+    return 1;
+}
+
 // test 1: basic inversion property a * a^{-1} = 1
 static int test_invert_basic(void)
 {
@@ -525,6 +662,10 @@ int main(int argc, char** argv)
         // default: run all basic tests
         int all_passed = 1;
         all_passed &= test_field_ops_deep();
+        all_passed &= test_iszero();
+        all_passed &= test_aliasing();
+        all_passed &= test_cswap_random();
+        all_passed &= test_chain_addition();
         all_passed &= test_invert_basic();
         all_passed &= test_invert_one();
         all_passed &= test_invert_symmetry();
@@ -568,6 +709,10 @@ int main(int argc, char** argv)
             i++;
         } else if (strcmp(argv[i], "--all") == 0) {
             test_field_ops_deep();
+            test_iszero();
+            test_aliasing();
+            test_cswap_random();
+            test_chain_addition();
             test_invert_basic();
             test_invert_one();
             test_invert_symmetry();
