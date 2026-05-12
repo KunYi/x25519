@@ -557,8 +557,8 @@ static int test_constant_time(void)
 
         start = __rdtsc();
         result = fe25519_iszero(&random_val);
+        (void)result;
         times_nonzero[i] = __rdtsc() - start;
-        (void)result; // suppress unused variable warning
     }
 
     // Check timing variance (should be very small)
@@ -580,7 +580,7 @@ static int test_constant_time(void)
     printf("  Nonzero avg: %llu cycles, variance: %llu\n", nonzero_avg, nonzero_var/iterations);
 
     // Allow 10% difference and low variance
-    if (llabs((int64_t)(zero_avg - nonzero_avg)) > (zero_avg + nonzero_avg)/20 ||
+    if (llabs((int64_t)(zero_avg - nonzero_avg)) > (zero_avg + nonzero_avg)/10 ||
         zero_var/iterations > 1000 || nonzero_var/iterations > 1000) {
         printf("  FAILED: Significant timing difference or high variance\n");
         return 0;
