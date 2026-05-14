@@ -590,6 +590,67 @@ static void test_aliasing_and_determinism(void)
     printf("Aliasing and determinism tests PASSED\n");
 }
 
+static void test_randomized_aliasing_stress(void)
+{
+    uint8_t scalar[32];
+    uint8_t point[32];
+
+    uint8_t expected[32];
+
+    uint8_t scalar_alias[32];
+    uint8_t point_alias[32];
+
+    printf("Testing randomized aliasing stress...\n");
+
+    for (size_t i = 0; i < 10000; i++) {
+
+        random_bytes(scalar, 32);
+        random_bytes(point, 32);
+
+        x25519_scalarmult(expected, scalar, point);
+
+        /*
+         * Case 1:
+         * out == scalar
+         */
+        memcpy(scalar_alias, scalar, 32);
+
+        x25519_scalarmult(
+            scalar_alias,
+            scalar_alias,
+            point
+        );
+
+        if (!bytes_equal(expected, scalar_alias, 32)) {
+
+            printf("Aliasing test FAILED (out == scalar)\n");
+
+            assert(0);
+        }
+
+        /*
+         * Case 2:
+         * out == point
+         */
+        memcpy(point_alias, point, 32);
+
+        x25519_scalarmult(
+            point_alias,
+            scalar,
+            point_alias
+        );
+
+        if (!bytes_equal(expected, point_alias, 32)) {
+
+            printf("Aliasing test FAILED (out == point)\n");
+
+            assert(0);
+        }
+    }
+
+    printf("Randomized aliasing stress PASSED\n");
+}
+
 static void test_random_diffie_hellman(void)
 {
     uint8_t alice_priv[32];
@@ -699,6 +760,8 @@ int main(void)
     test_known_non_null_inputs();
 
     test_aliasing_and_determinism();
+
+    test_randomized_aliasing_stress();
 
     test_rfc7748_iteration_1000();
 
