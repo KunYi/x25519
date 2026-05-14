@@ -235,14 +235,19 @@ static void test_rfc7748_diffie_hellman(void)
  * produce an all-zero shared secret after scalar clamping; callers may
  * reject that all-zero result at the protocol layer.
  */
-static void test_low_order_points(void)
+static void test_known_null_shared_secret_inputs(void)
 {
     /*
-     * These are X25519 u-coordinate encodings that produce a null
-     * shared secret with any clamped scalar. 0x80 in the final byte is
-     * included to verify the RFC 7748 input high-bit masking rule.
-     */
-    static const uint8_t null_shared_secret_points[][32] = {
+    * These inputs are known to produce all-zero shared secrets
+    * under RFC7748 X25519 semantics.
+    *
+    * They are treated as behavioral regression vectors rather
+    * than formal subgroup proofs.
+    *
+    * The final-byte 0x80 variant additionally verifies the
+    * RFC7748 high-bit masking rule for input u-coordinates.
+    */
+    static const uint8_t known_null_shared_secret_inputs[][32] = {
         /* u = 0 */
         {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
          0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
@@ -289,12 +294,12 @@ static void test_low_order_points(void)
     uint8_t priv[32];
     uint8_t out[32];
 
-    size_t num_points =
-        sizeof(null_shared_secret_points) /
-        sizeof(null_shared_secret_points[0]);
+    size_t num_inputs =
+        sizeof(known_null_shared_secret_inputs) /
+        sizeof(known_null_shared_secret_inputs[0]);
 
-    printf("Testing %zu null shared-secret points with multiple scalars...\n",
-           num_points);
+    printf("Testing %zu known null shared-secret inputs...\n",
+        num_inputs);
 
     for (int s = 0; s < 3; s++) {
         memset(priv, 0, sizeof(priv));
@@ -308,16 +313,16 @@ static void test_low_order_points(void)
         }
         clamp_scalar(priv);
 
-        for (size_t i = 0; i < num_points; i++) {
+        for (size_t i = 0; i < num_inputs; i++) {
             memset(out, 0xFF, sizeof(out));
-            x25519_scalarmult(out, priv, null_shared_secret_points[i]);
+            x25519_scalarmult(out, priv, known_null_shared_secret_inputs[i]);
 
             if (!is_zero(out, 32)) {
-                printf("Null shared-secret point #%zu produced non-zero output FAILED\n", i);
+                printf("Known null shared-secret input #%zu produced non-zero output FAILED\n", i);
                 printf("  Scalar used:\n  ");
                 print_hex(priv, 32);
                 printf("  Point:\n  ");
-                print_hex(null_shared_secret_points[i], 32);
+                print_hex(known_null_shared_secret_inputs[i], 32);
                 printf("  Output:\n  ");
                 print_hex(out, 32);
                 assert(0);
@@ -325,7 +330,7 @@ static void test_low_order_points(void)
         }
     }
 
-    printf("Null shared-secret point test PASSED\n");
+    printf("Known null shared-secret input tests PASSED\n");
 }
 
 static void test_scalar_clamping_and_input_decoding(void)
@@ -591,7 +596,7 @@ int main(void)
 
     test_rfc7748_diffie_hellman();
 
-    test_low_order_points();
+    test_known_null_shared_secret_inputs();
 
     test_scalar_clamping_and_input_decoding();
 
