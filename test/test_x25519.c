@@ -53,6 +53,36 @@ static void random_bytes(uint8_t *buf, size_t len)
     }
 }
 
+static void add_25519_p_no_wrap(uint8_t out[32],
+                                const uint8_t in[32])
+{
+    static const uint8_t p[32] = {
+        0xed,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+        0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+        0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+        0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x7f
+    };
+
+    uint16_t carry = 0;
+
+    for (size_t i = 0; i < 32; i++) {
+
+        uint16_t sum =
+            (uint16_t)in[i] +
+            (uint16_t)p[i] +
+            carry;
+
+        out[i] = (uint8_t)sum;
+
+        carry = sum >> 8;
+    }
+
+    /*
+     * Valid equivalence vectors must not overflow bit255.
+     */
+    assert(carry == 0);
+}
+
 /*
  * Clamp scalar as per RFC 7748 Section 5.
  *
@@ -394,6 +424,70 @@ static void test_scalar_clamping_and_input_decoding(void)
     printf("Scalar clamping and input decoding PASSED\n");
 }
 
+static void test_noncanonical_equivalent_encodings(void)
+{
+    uint8_t scalar[32];
+
+    uint8_t canonical[32];
+    uint8_t noncanonical[32];
+
+    uint8_t out1[32];
+    uint8_t out2[32];
+
+    printf("Testing RFC7748 non-canonical equivalent encodings...\n");
+
+    random_bytes(scalar, 32);
+
+    /*
+     * Only 19 equivalence classes exist without crossing
+     * the RFC7748 bit255 masking boundary:
+     *
+     *     u + p < 2^255
+     */
+    for (uint8_t u = 0; u < 19; u++) {
+
+        memset(canonical, 0, sizeof(canonical));
+
+        canonical[0] = u;
+
+        add_25519_p_no_wrap(noncanonical, canonical);
+
+        /*
+         * Sanity check:
+         *
+         * noncanonical must still remain below 2^255,
+         * otherwise RFC7748 masking semantics change
+         * the decoded value.
+         */
+        assert((noncanonical[31] & 0x80) == 0);
+
+        x25519_scalarmult(out1, scalar, canonical);
+
+        x25519_scalarmult(out2, scalar, noncanonical);
+
+        if (!bytes_equal(out1, out2, 32)) {
+
+            printf("RFC7748 equivalent encoding FAILED\n");
+
+            printf("u:\n");
+            print_hex(canonical, 32);
+
+            printf("u+p:\n");
+            print_hex(noncanonical, 32);
+
+            printf("Output canonical:\n");
+            print_hex(out1, 32);
+
+            printf("Output noncanonical:\n");
+            print_hex(out2, 32);
+
+            assert(0);
+        }
+    }
+
+    printf("RFC7748 non-canonical equivalent encoding test PASSED\n");
+}
+
 static void test_known_non_null_inputs(void)
 {
     struct {
@@ -599,6 +693,8 @@ int main(void)
     test_known_null_shared_secret_inputs();
 
     test_scalar_clamping_and_input_decoding();
+
+    test_noncanonical_equivalent_encodings();
 
     test_known_non_null_inputs();
 
