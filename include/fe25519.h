@@ -223,19 +223,32 @@ FE25519_INLINE void fe25519_reduce(fe25519_t* out)
 /**
  * @brief Constant-time conditional swap.
  *
- * If @p swap is non-zero, swaps @p a and @p b.
- * Otherwise, no operation is performed.
+ * If @p swap is non-zero, atomically exchanges @p a and @p b.
+ * If @p swap is zero, both elements are left unchanged.
  *
- * This function avoids secret-dependent branches and is
- * intended for use in the Montgomery ladder.
+ * The swap decision is made without any secret-dependent branch.
+ * Any non-zero value of @p swap triggers the exchange — the caller
+ * is not required to normalise the flag to exactly 0 or 1.
  *
  * @param[in,out] a    First field element.
  * @param[in,out] b    Second field element.
- * @param[in]     swap Swap control flag.
+ * @param[in]     swap Swap control: 0 = no-op, any non-zero = swap.
  */
 FE25519_INLINE void fe25519_cswap(fe25519_t* a, fe25519_t* b, uint32_t swap)
 {
-    uint32_t mask = (uint32_t)(-(int32_t)(swap & 1));
+    /*
+     * Normalise swap to a strict boolean (0 or 1) without branching,
+     * then derive an all-ones or all-zeros mask in unsigned arithmetic:
+     *
+     *   (swap != 0)  →  bool_val = 1  →  1u - 1u = 0u   →  ~0u = 0xFFFFFFFF
+     *   (swap == 0)  →  bool_val = 0  →  0u - 1u = UINT32_MAX  →  ~UINT32_MAX = 0
+     *
+     * Using (swap != 0) instead of (swap & 1u) correctly handles any
+     * non-zero input (e.g. 0x2, 0xFFFFFFFF), matching the documented
+     * semantics.  All arithmetic stays in the unsigned domain — no UB.
+     */
+    const uint32_t bool_val = (swap != 0);
+    const uint32_t mask     = ~(bool_val - 1u);
     for (size_t i = 0; i < 10; i++) {
         uint32_t diff = mask & (a->v[i] ^ b->v[i]);
         a->v[i] ^= diff;
