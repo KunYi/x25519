@@ -1,17 +1,25 @@
 #include "fe25519.h"
 
 /**
- * @brief Field addition modulo p.
+ * @brief Compute multiplicative inverse modulo p.
  *
- * Computes:
+ * Computes z^(p-2) mod p via a fixed addition-chain derived from
+ * the ref10 pow225521 sequence (Bernstein et al.).
+ *
+ * The exponent is:
  *
  * @f[
- * out = a + b \pmod p
+ * p - 2 = 2^{255} - 21
  * @f]
  *
- * @param[out] out Result field element.
- * @param[in]  a   Left operand.
- * @param[in]  b   Right operand.
+ * Total cost: 254 squarings + 11 multiplications.
+ *
+ * @note Inversion of zero returns zero (convention used by RFC 7748
+ *       Montgomery ladder — the all-zero output is detected at the
+ *       protocol layer).
+ *
+ * @param[out] out  @f$ z^{-1} \bmod p @f$.
+ * @param[in]  z    Input field element.
  */
 void fe25519_invert(fe25519_t* out, const fe25519_t* z)
 {
